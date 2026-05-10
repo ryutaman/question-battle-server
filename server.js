@@ -3,7 +3,8 @@ const { WebSocketServer } = require('ws');
 const PORT = process.env.PORT || 8080;
 const wss = new WebSocketServer({ port: PORT });
 
-let waitingPlayer = null;
+// 分野ごとの待機プレイヤー: { all: ws, history: ws, geo: ws, civics: ws }
+const waitingPlayers = {};
 const codeRooms = {};
 const battles = {};
 let battleIdCounter = 0;
@@ -17,9 +18,24 @@ function startBattle(wsA, wsB) {
   wsA._battleId = wsB._battleId = id;
   wsA._role = 0; wsB._role = 1;
   battles[id] = { players: [wsA, wsB] };
-  // 互いのニックネームを伝える
-  send(wsA, { type: 'matched', role: 0, battleId: id, opponentNick: wsB._nick || '相手' });
-  send(wsB, { type: 'matched', role: 1, battleId: id, opponentNick: wsA._nick || '相手' });
+
+  // 互いにニックネーム・称号メダルID・分野を伝える
+  send(wsA, {
+    type: 'matched',
+    role: 0,
+    battleId: id,
+    opponentNick: wsB._nick || '相手',
+    opponentMedalId: wsB._medalId || null,
+    subject: wsA._subject || 'all'
+  });
+  send(wsB, {
+    type: 'matched',
+    role: 1,
+    battleId: id,
+    opponentNick: wsA._nick || '相手',
+    opponentMedalId: wsA._medalId || null,
+    subject: wsB._subject || 'all'
+  });
 }
 
 wss.on('connection', ws => {
@@ -27,21 +43,32 @@ wss.on('connection', ws => {
   ws._role = null;
   ws._code = null;
   ws._nick = '相手';
+  ws._medalId = null;
+  ws._subject = 'all';
 
   ws.on('message', raw => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
-    // ニックネームを保存
-    if (msg.nick) ws._nick = String(msg.nick).slice(0, 12);
+    // ニックネーム・メダルID・分野を保存
+    if (msg.nick)     ws._nick    = String(msg.nick).slice(0, 12);
+    if (msg.medalId)  ws._medalId = String(msg.medalId).slice(0, 32);
+    if (msg.subject)  ws._subject = String(msg.subject).slice(0, 16);
 
     if (msg.type === 'random') {
-      if (waitingPlayer && waitingPlayer !== ws && waitingPlayer.readyState === 1) {
-        const opponent = waitingPlayer;
-        waitingPlayer = null;
-        startBattle(ws, opponent);
+      const subj = ws._subject || 'all';
+
+      // 同じ分野の待機プレイヤーを探す
+      const waiting = waitingPlayers[subj];
+      if (waiting && waiting !== ws && waiting.readyState === 1) {
+        delete waitingPlayers[subj];
+        startBattle(ws, waiting);
       } else {
-        waitingPlayer = ws;
+        // 既に自分が別の分野で待機していたら解除
+        Object.keys(waitingPlayers).forEach(k => {
+          if (waitingPlayers[k] === ws) delete waitingPlayers[k];
+        });
+        waitingPlayers[subj] = ws;
         send(ws, { type: 'waiting' });
       }
     }
@@ -76,7 +103,10 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
-    if (waitingPlayer === ws) waitingPlayer = null;
+    // 待機中なら除外
+    Object.keys(waitingPlayers).forEach(k => {
+      if (waitingPlayers[k] === ws) delete waitingPlayers[k];
+    });
     if (ws._code && codeRooms[ws._code]) {
       codeRooms[ws._code] = codeRooms[ws._code].filter(w => w !== ws);
       if (codeRooms[ws._code].length === 0) delete codeRooms[ws._code];
