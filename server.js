@@ -45,47 +45,55 @@ wss.on('connection', ws => {
   ws._nick = '相手';
   ws._medalId = null;
   ws._subject = 'all';
+  ws._subjectId = 'social';
 
   ws.on('message', raw => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
     // ニックネーム・メダルID・分野を保存
-    if (msg.nick)     ws._nick    = String(msg.nick).slice(0, 12);
-    if (msg.medalId)  ws._medalId = String(msg.medalId).slice(0, 32);
-    if (msg.subject)  ws._subject = String(msg.subject).slice(0, 16);
+    if (msg.nick)      ws._nick      = String(msg.nick).slice(0, 12);
+    if (msg.medalId)   ws._medalId   = String(msg.medalId).slice(0, 32);
+    if (msg.subject)   ws._subject   = String(msg.subject).slice(0, 16);
+    if (msg.subjectId) ws._subjectId = String(msg.subjectId).slice(0, 32);
 
     if (msg.type === 'random') {
       const subj = ws._subject || 'all';
+      const subjId = ws._subjectId || 'social';
+      // 待機キーに subjectId を含める（教科をまたいだマッチングを防ぐ）
+      const waitKey = subjId + ':' + subj;
 
-      // 同じ分野の待機プレイヤーを探す
-      const waiting = waitingPlayers[subj];
+      // 同じ教科・同じ分野の待機プレイヤーを探す
+      const waiting = waitingPlayers[waitKey];
       if (waiting && waiting !== ws && waiting.readyState === 1) {
-        delete waitingPlayers[subj];
+        delete waitingPlayers[waitKey];
         startBattle(ws, waiting);
       } else {
-        // 既に自分が別の分野で待機していたら解除
+        // 既に自分が別のキーで待機していたら解除
         Object.keys(waitingPlayers).forEach(k => {
           if (waitingPlayers[k] === ws) delete waitingPlayers[k];
         });
-        waitingPlayers[subj] = ws;
+        waitingPlayers[waitKey] = ws;
         send(ws, { type: 'waiting' });
       }
     }
 
     if (msg.type === 'code') {
       const code = String(msg.code).trim();
-      ws._code = code;
-      if (!codeRooms[code]) {
-        codeRooms[code] = [ws];
+      const subjId = ws._subjectId || 'social';
+      // 合言葉キーに subjectId を含める
+      const codeKey = subjId + ':' + code;
+      ws._code = codeKey;
+      if (!codeRooms[codeKey]) {
+        codeRooms[codeKey] = [ws];
         send(ws, { type: 'waiting', code });
       } else {
-        const opponent = codeRooms[code][0];
+        const opponent = codeRooms[codeKey][0];
         if (opponent && opponent !== ws && opponent.readyState === 1) {
-          delete codeRooms[code];
+          delete codeRooms[codeKey];
           startBattle(ws, opponent);
         } else {
-          codeRooms[code] = [ws];
+          codeRooms[codeKey] = [ws];
           send(ws, { type: 'waiting', code });
         }
       }
