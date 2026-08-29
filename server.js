@@ -45,7 +45,6 @@ wss.on('connection', ws => {
   ws._nick = '相手';
   ws._medalId = null;
   ws._subject = 'all';
-  ws._finishedNormally = false; // 対戦を最後まで終えて結果画面に進んだ場合にtrue（切断＝退出と誤判定しないための印）
 
   ws.on('message', raw => {
     let msg;
@@ -92,11 +91,6 @@ wss.on('connection', ws => {
       }
     }
 
-    // 対戦を最後まで終えて結果画面に進んだ合図（切断時にopponent_leftを送らないようにするための印）
-    if (msg.type === 'finished' && ws._battleId) {
-      ws._finishedNormally = true;
-    }
-
     // ゲームメッセージを相手に転送
     if (msg.type === 'game' && ws._battleId) {
       const battle = battles[ws._battleId];
@@ -105,12 +99,6 @@ wss.on('connection', ws => {
       if (opponent && opponent.readyState === 1) {
         send(opponent, { type: 'game', data: msg.data, from: ws._role });
       }
-    }
-
-    // RTT計測用のping/pong（進行ペース同期・案2 Step1）
-    // 判定・進行には一切使わず、往復時間を計測して返すだけ。既存の対戦ロジックには影響しない。
-    if (msg.type === 'ping') {
-      send(ws, { type: 'pong', t: msg.t });
     }
   });
 
@@ -126,9 +114,7 @@ wss.on('connection', ws => {
     if (ws._battleId && battles[ws._battleId]) {
       const battle = battles[ws._battleId];
       const opponent = battle.players[1 - ws._role];
-      // 対戦を最後まで終えて（結果画面に進んで）ソケットを閉じた場合は、
-      // 本当の途中退出ではないのでopponent_leftを送らない
-      if (opponent && opponent.readyState === 1 && !ws._finishedNormally) {
+      if (opponent && opponent.readyState === 1) {
         send(opponent, { type: 'opponent_left' });
       }
       delete battles[ws._battleId];
