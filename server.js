@@ -45,58 +45,56 @@ wss.on('connection', ws => {
   ws._nick = '相手';
   ws._medalId = null;
   ws._subject = 'all';
-  ws._subjectId = 'social';
+  ws._finishedNormally = false; // 対戦を最後まで終えて結果画面に進んだ場合にtrue（切断＝退出と誤判定しないための印）
 
   ws.on('message', raw => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
     // ニックネーム・メダルID・分野を保存
-    if (msg.nick)      ws._nick      = String(msg.nick).slice(0, 12);
-    if (msg.medalId)   ws._medalId   = String(msg.medalId).slice(0, 32);
-    if (msg.subject)   ws._subject   = String(msg.subject).slice(0, 16);
-    if (msg.subjectId) ws._subjectId = String(msg.subjectId).slice(0, 32);
+    if (msg.nick)     ws._nick    = String(msg.nick).slice(0, 12);
+    if (msg.medalId)  ws._medalId = String(msg.medalId).slice(0, 32);
+    if (msg.subject)  ws._subject = String(msg.subject).slice(0, 16);
 
     if (msg.type === 'random') {
       const subj = ws._subject || 'all';
-      const subjId = ws._subjectId || 'social';
-      // 待機キーに subjectId を含める（教科をまたいだマッチングを防ぐ）
-      const waitKey = subjId + ':' + subj;
 
-      // 同じ教科・同じ分野の待機プレイヤーを探す
-      const waiting = waitingPlayers[waitKey];
+      // 同じ分野の待機プレイヤーを探す
+      const waiting = waitingPlayers[subj];
       if (waiting && waiting !== ws && waiting.readyState === 1) {
-        delete waitingPlayers[waitKey];
+        delete waitingPlayers[subj];
         startBattle(ws, waiting);
       } else {
-        // 既に自分が別のキーで待機していたら解除
+        // 既に自分が別の分野で待機していたら解除
         Object.keys(waitingPlayers).forEach(k => {
           if (waitingPlayers[k] === ws) delete waitingPlayers[k];
         });
-        waitingPlayers[waitKey] = ws;
+        waitingPlayers[subj] = ws;
         send(ws, { type: 'waiting' });
       }
     }
 
     if (msg.type === 'code') {
       const code = String(msg.code).trim();
-      const subjId = ws._subjectId || 'social';
-      // 合言葉キーに subjectId を含める
-      const codeKey = subjId + ':' + code;
-      ws._code = codeKey;
-      if (!codeRooms[codeKey]) {
-        codeRooms[codeKey] = [ws];
+      ws._code = code;
+      if (!codeRooms[code]) {
+        codeRooms[code] = [ws];
         send(ws, { type: 'waiting', code });
       } else {
-        const opponent = codeRooms[codeKey][0];
+        const opponent = codeRooms[code][0];
         if (opponent && opponent !== ws && opponent.readyState === 1) {
-          delete codeRooms[codeKey];
+          delete codeRooms[code];
           startBattle(ws, opponent);
         } else {
-          codeRooms[codeKey] = [ws];
+          codeRooms[code] = [ws];
           send(ws, { type: 'waiting', code });
         }
       }
+    }
+
+    // 対戦を最後まで終えて結果画面に進んだ合図（切断時にopponent_leftを送らないようにするための印）
+    if (msg.type === 'finished' && ws._battleId) {
+      ws._finishedNormally = true;
     }
 
     // ゲームメッセージを相手に転送
@@ -122,7 +120,9 @@ wss.on('connection', ws => {
     if (ws._battleId && battles[ws._battleId]) {
       const battle = battles[ws._battleId];
       const opponent = battle.players[1 - ws._role];
-      if (opponent && opponent.readyState === 1) {
+      // 対戦を最後まで終えて（結果画面に進んで）ソケットを閉じた場合は、
+      // 本当の途中退出ではないのでopponent_leftを送らない
+      if (opponent && opponent.readyState === 1 && !ws._finishedNormally) {
         send(opponent, { type: 'opponent_left' });
       }
       delete battles[ws._battleId];
