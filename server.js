@@ -106,6 +106,12 @@ wss.on('connection', ws => {
         send(opponent, { type: 'game', data: msg.data, from: ws._role });
       }
     }
+
+    // RTT計測用のping/pong（進行ペース同期・案2 Step1）
+    // 判定・進行には一切使わず、往復時間を計測して返すだけ。既存の対戦ロジックには影響しない。
+    if (msg.type === 'ping') {
+      send(ws, { type: 'pong', t: msg.t });
+    }
   });
 
   ws.on('close', () => {
